@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard — Dr. Getaneh Dental Clinic</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-brand">🦷 Dr. Getaneh Dental Clinic</div>
+    <div class="nav-links">
+      <a href="dashboard.html" class="active">Dashboard</a>
+      <a href="patients.html">Patients</a>
+      <span id="navUser"></span>
+      <button class="btn-logout" id="logoutBtn">Logout</button>
+    </div>
+  </nav>
+
+  <div class="container">
+    <h2>Today's Schedule</h2>
+    <p id="todayDate" class="date-label"></p>
+
+    <!-- Book Appointment -->
+    <div class="card">
+      <h3>Book New Appointment</h3>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Search Patient (name or phone)</label>
+          <input type="text" id="searchPatient" placeholder="Type to search...">
+          <div id="patientResults" class="dropdown-results"></div>
+          <input type="hidden" id="selectedPatientId">
+          <div id="selectedPatientLabel" class="selected-label"></div>
+        </div>
+        <div class="form-group">
+          <label>Date</label>
+          <input type="date" id="apptDate">
+        </div>
+        <div class="form-group">
+          <label>Available Slots</label>
+          <select id="apptTime"><option value="">-- Pick a date first --</option></select>
+        </div>
+        <div class="form-group">
+          <label>Procedure</label>
+          <input type="text" id="apptProcedure" placeholder="e.g. Cleaning, Filling" value="General Checkup">
+        </div>
+      </div>
+      <div id="bookError" class="error-msg" style="display:none;"></div>
+      <div id="bookSuccess" class="success-msg" style="display:none;"></div>
+      <button class="btn-primary" id="bookBtn">Book Appointment</button>
+    </div>
+
+    <!-- Today's Appointments Table -->
+    <div class="card">
+      <div class="card-header-row">
+        <h3>Appointments</h3>
+        <input type="date" id="filterDate">
+      </div>
+      <div id="appointmentsTable">Loading...</div>
+    </div>
+  </div>
+
+  <script src="js/app.js"></script>
+  <script>
+    // Auth check
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then(r => r.json())
+      .then(d => {
+        if (!d.success) window.location.href = 'index.html';
+        else document.getElementById('navUser').textContent = d.user.username + ' (' + d.user.role + ')';
+      });
+
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+      window.location.href = 'index.html';
+    });
+
+    // Set today's date
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('todayDate').textContent = new Date().toDateString();
+    document.getElementById('apptDate').value = today;
+    document.getElementById('filterDate').value = today;
+    document.getElementById('apptDate').min = today;
+
+    // Load slots when date changes
+    document.getElementById('apptDate').addEventListener('change', loadSlots);
+    loadSlots();
+
+    async function loadSlots() {
+      const date = document.getElementById('apptDate').value;
+      if (!date) return;
+      const res = await fetch(`/api/appointments/slots/${date}`, { credentials: 'include' });
+      const data = await res.json();
+      const sel = document.getElementById('apptTime');
+      sel.innerHTML = data.available_slots.length === 0
+        ? '<option value="">No slots available</option>'
+        : data.available_slots.map(t => `<option value="${t}">${t}</option>`).join('');
+    }
+
+    // Patient search
+    let searchTimeout;
+    document.getElementById('searchPatient').addEventListener('input', (e) => {
+      clearTimeout(searchTimeout);
+      const q = e.target.value.trim();
+      if (q.length < 2) { document.getElementById('patientResults').innerHTML = ''; return; }
+      searchTimeout = setTimeout(async () => {
+        const res = await fetch(`/api/patients?search=${encodeURIComponent(q)}`, { credentials: 'include' });
+        const data = await res.json();
+        const div = document.getElementById('patientResults');
+        if (!data.patients || data.patients.length === 0) {
+          div.innerHTML = '<div class="dropdown-item">No patients found</div>';
+          return;
+        }
+        div.innerHTML = data.patients.slice(0, 5).map(p =>
+          `<div class="dropdown-item" onclick="selectPatient(${p.patient_id}, '${p.first_name} ${p.last_name}', '${p.phone_number}')">
+            ${p.first_name} ${p.last_name} — ${p.phone_number}
+          </div>`
+        ).join('');
+      }, 300);
+    });
+
+    function selectPatient(id, name, phone) {
+      document.getElementById('selectedPatientId').value = id;
+      document.getElementById('searchPatient').value = name;
+      document.getElementById('selectedPatientLabel').textContent = `✅ ${name} | ${phone}`;
+      document.getElementById('patientResults').innerHTML = '';
+    }
+
+    // Book appointment
+    document.getElementById('bookBtn').addEventListener('click', async () => {
+      const patientId = document.getElementById('selectedPatientId').value;
+      const date = document.getElementById('apptDate').value;
+      const time = document.getElementById('apptTime').value;
+      const procedure = document.getElementById('apptProcedure').value;
+      const errDiv = document.getElementById('bookError');
+      const okDiv = document.getElementById('bookSuccess');
+      errDiv.style.display = 'none'; okDiv.style.display = 'none';
+
+      if (!patientId) { errDiv.textContent = 'Please select a patient.'; errDiv.style.display = 'block'; return; }
+      if (!time) { errDiv.textContent = 'Please select a time slot.'; errDiv.style.display = 'block'; return; }
+
+      const res = await fetch('/api/appointments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ patient_id: patientId, appointment_date: date, appointment_time: time, procedure_type: procedure })
+      });
+      const data = await res.json();
+      if (data.success) {
+        okDiv.textContent = '✅ Appointment booked successfully!';
+        okDiv.style.display = 'block';
+        loadSlots();
+        loadAppointments();
+        document.getElementById('selectedPatientId').value = '';
+        document.getElementById('searchPatient').value = '';
+        document.getElementById('selectedPatientLabel').textContent = '';
+      } else {
+        errDiv.textContent = data.message;
+        errDiv.style.display = 'block';
+      }
+    });
+
+    // Load appointments table
+    document.getElementById('filterDate').addEventListener('change', loadAppointments);
+    loadAppointments();
+
+    async function loadAppointments() {
+      const date = document.getElementById('filterDate').value || today;
+      const res = await fetch(`/api/appointments/date/${date}`, { credentials: 'include' });
+      const data = await res.json();
+      const div = document.getElementById('appointmentsTable');
+      if (!data.appointments || data.appointments.length === 0) {
+        div.innerHTML = '<p class="empty-msg">No appointments for this date.</p>';
+        return;
+      }
+      div.innerHTML = `
+        <table class="data-table">
+          <thead><tr>
+            <th>Time</th><th>Patient</th><th>Phone</th><th>Procedure</th><th>Status</th><th>Actions</th>
+          </tr></thead>
+          <tbody>
+            ${data.appointments.map(a => `
+              <tr>
+                <td>${a.appointment_time}</td>
+                <td>${a.first_name} ${a.last_name}</td>
+                <td>${a.phone_number}</td>
+                <td>${a.procedure_type}</td>
+                <td><span class="badge badge-${a.status.toLowerCase().replace('-','')}>${a.status}</span></td>
+                <td class="actions">
+                  ${a.status === 'Scheduled' ? `<button onclick="updateStatus(${a.appointment_id},'In-Progress')" class="btn-sm btn-info">Start</button>` : ''}
+                  ${a.status === 'In-Progress' ? `<button onclick="updateStatus(${a.appointment_id},'Completed')" class="btn-sm btn-success">Complete</button>` : ''}
+                  ${['Scheduled','In-Progress'].includes(a.status) ? `<button onclick="cancelAppt(${a.appointment_id})" class="btn-sm btn-danger">Cancel</button>` : ''}
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>`;
+    }
+
+    async function updateStatus(id, status) {
+      await fetch(`/api/appointments/${id}/status`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', body: JSON.stringify({ status })
+      });
+      loadAppointments();
+    }
+
+    async function cancelAppt(id) {
+      if (!confirm('Are you sure you want to cancel this appointment?')) return;
+      await fetch(`/api/appointments/${id}/cancel`, { method: 'PATCH', credentials: 'include' });
+      loadAppointments();
+      loadSlots();
+    }
+  </script>
+</body>
+</html>
